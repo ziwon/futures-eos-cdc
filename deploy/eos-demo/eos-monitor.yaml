@@ -1,0 +1,129 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: eos-monitor-script
+  namespace: trading
+data:
+  monitor-eos.sh: |
+    #!/bin/bash
+
+    # Colors
+    RED='\033[0;31m'
+    GREEN='\033[0;32m'
+    YELLOW='\033[1;33m'
+    BLUE='\033[0;34m'
+    NC='\033[0m'
+
+    echo -e "${BLUE}═══════════════════════════════════════════════════════════${NC}"
+    echo -e "${BLUE}           EOS (Exactly-Once Semantics) Monitor            ${NC}"
+    echo -e "${BLUE}═══════════════════════════════════════════════════════════${NC}"
+
+    # Function to count messages in a topic
+    count_messages() {
+        local topic=$1
+        local count=$(kcat -b trading-kafka-bootstrap:9092 -C -t $topic -q -o beginning -e 2>/dev/null | wc -l)
+        echo $count
+    }
+
+    # Function to check for duplicates in topic
+    check_duplicates() {
+        local topic=$1
+        echo -e "\n${YELLOW}Checking duplicates in $topic...${NC}"
+
+        # Get messages and check for duplicate content
+        kcat -b trading-kafka-bootstrap:9092 -C -t $topic -q -o -100 -e 2>/dev/null | \
+        jq -r '.symbol + "-" + (.price|tostring) + "-" + (.side|tostring) + "-" + (.ts|tostring)' 2>/dev/null | \
+        sort | uniq -d > /tmp/duplicates.txt
+
+        if [ -s /tmp/duplicates.txt ]; then
+            echo -e "${RED}⚠️  Duplicates found:${NC}"
+            cat /tmp/duplicates.txt
+        else
+            echo -e "${GREEN}✅ No duplicates detected${NC}"
+        fi
+    }
+
+    # Monitor consumer group lag
+    check_consumer_lag() {
+        echo -e "\n${YELLOW}Consumer Group Lag:${NC}"
+        kafka-consumer-groups.sh --bootstrap-server trading-kafka-bootstrap:9092 \
+            --group signal-processor --describe 2>/dev/null | \
+            grep -E "TOPIC|trading.signal" || echo "No lag data available"
+    }
+
+    # Check transactional state
+    check_transactions() {
+        echo -e "\n${YELLOW}Transaction Log Status:${NC}"
+        kafka-topics.sh --bootstrap-server trading-kafka-bootstrap:9092 \
+            --describe --topic __transaction_state 2>/dev/null || \
+            echo "Transaction log not found (normal if no transactions yet)"
+    }
+
+    # Monitor stream processor state
+    monitor_processor() {
+        echo -e "\n${YELLOW}Signal Processor Status:${NC}"
+        local pod=$(kubectl get pods -n trading -l app=signal-processor -o jsonpath='{.items[0].metadata.name}' 2>/dev/null)
+
+        if [ -n "$pod" ]; then
+            echo -e "${GREEN}Pod: $pod${NC}"
+
+            # Check for EOS-related logs
+            kubectl logs $pod -n trading --tail=20 2>/dev/null | \
+                grep -E "EOS|exactly-once|transaction|commit" | \
+                tail -5 || echo "No EOS-specific logs found"
+        else
+            echo -e "${RED}Signal processor not running${NC}"
+        fi
+    }
+
+    # Main monitoring loop
+    echo -e "\n${BLUE}Starting EOS monitoring...${NC}"
+
+    while true; do
+        clear
+        echo -e "${BLUE}═══════════════════════════════════════════════════════════${NC}"
+        echo -e "${BLUE}     EOS Monitor - $(date '+%Y-%m-%d %H:%M:%S')${NC}"
+        echo -e "${BLUE}═══════════════════════════════════════════════════════════${NC}"
+
+        # Message counts
+        echo -e "\n${YELLOW}📊 Message Counts:${NC}"
+        for topic in trading.signal.1m trading.signal.5m trading.signal.15m trading.decisions; do
+            count=$(count_messages $topic)
+            printf "  %-25s: %6d messages\n" "$topic" "$count"
+        done
+
+        # Check for duplicates
+        check_duplicates "trading.signal.1m"
+
+        # Consumer lag
+        check_consumer_lag
+
+        # Transaction status
+        check_transactions
+
+        # Processor status
+        monitor_processor
+
+        echo -e "\n${BLUE}Press Ctrl+C to exit. Refreshing in 10 seconds...${NC}"
+        sleep 10
+    done
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: eos-monitor
+  namespace: trading
+spec:
+  containers:
+  - name: monitor
+    image: confluentinc/cp-kafka:7.7.0
+    command: ["/bin/bash"]
+    args: ["-c", "apk add --no-cache jq && bash /scripts/monitor-eos.sh"]
+    volumeMounts:
+    - name: script
+      mountPath: /scripts
+  volumes:
+  - name: script
+    configMap:
+      name: eos-monitor-script
+      defaultMode: 0755

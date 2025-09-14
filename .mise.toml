@@ -1,0 +1,9 @@
+[tools]
+java = "21"
+gradle = "latest"
+helm = "latest"
+kubectl = "latest"
+kind = "latest"
+just = "latest"
+jq = "latest"
+yq = "latest"

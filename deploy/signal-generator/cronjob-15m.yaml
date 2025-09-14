@@ -1,0 +1,26 @@
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: signal-generator-15m
+  namespace: trading
+spec:
+  schedule: "*/15 * * * *"  # Every 15 minutes
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 1
+  jobTemplate:
+    spec:
+      template:
+        spec:
+          restartPolicy: OnFailure
+          containers:
+          - name: signal-generator
+            image: localhost:9001/signal-generator:0.1.0
+            imagePullPolicy: IfNotPresent
+            envFrom:
+            - configMapRef: { name: signal-generator-config }
+            env:
+            - name: KAFKA_BOOTSTRAP
+              value: "trading-kafka-bootstrap:9092"
+            - name: TF
+              value: "15m"

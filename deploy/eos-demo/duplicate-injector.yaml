@@ -1,0 +1,159 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: eos-demo-script
+  namespace: trading
+data:
+  inject-duplicates.py: |
+    #!/usr/bin/env python3
+    import json
+    import time
+    import random
+    import sys
+    from kafka import KafkaProducer, KafkaConsumer
+    from datetime import datetime
+
+    BOOTSTRAP_SERVERS = 'trading-kafka-bootstrap:9092'
+
+    def inject_duplicates(topic='trading.signal.1m', num_duplicates=10, delay_between=0.1):
+        """
+        Inject duplicate signals to test EOS handling.
+        Each signal is sent multiple times with the same content.
+        """
+        producer = KafkaProducer(
+            bootstrap_servers=BOOTSTRAP_SERVERS,
+            value_serializer=lambda v: json.dumps(v).encode('utf-8'),
+            key_serializer=lambda k: k.encode('utf-8') if k else None,
+            acks='all',  # Wait for all replicas
+            retries=3
+        )
+
+        print(f"🔄 Starting duplicate injection test on topic: {topic}")
+        print(f"   Will send {num_duplicates} copies of each signal")
+
+        symbols = ['BTCUSDT', 'ETHUSDT', 'SOLUSDT']
+
+        for symbol in symbols:
+            # Create a unique signal
+            signal = {
+                'symbol': symbol,
+                'side': random.choice(['BUY', 'SELL']),
+                'qty': round(random.uniform(0.1, 10.0), 4),
+                'price': round(random.uniform(1000, 100000), 2),
+                'timeframe': '1m',
+                'ts': int(time.time() * 1000),
+                'test_id': f"eos-test-{datetime.now().strftime('%Y%m%d-%H%M%S')}",
+                'duplicate_test': True
+            }
+
+            # Use symbol as key for consistent partitioning
+            key = symbol
+
+            print(f"\n📊 Signal: {symbol} - {signal['side']} @ {signal['price']}")
+            print(f"   Test ID: {signal['test_id']}")
+
+            # Send the same signal multiple times
+            for i in range(num_duplicates):
+                future = producer.send(topic, key=key, value=signal)
+                result = future.get(timeout=10)
+                print(f"   ✅ Duplicate #{i+1} sent - partition: {result.partition}, offset: {result.offset}")
+                time.sleep(delay_between)
+
+        producer.flush()
+        producer.close()
+        print("\n✨ Duplicate injection complete!")
+
+    def verify_deduplication(topic='trading.decisions', duration=30):
+        """
+        Monitor the output topic to verify deduplication.
+        """
+        consumer = KafkaConsumer(
+            topic,
+            bootstrap_servers=BOOTSTRAP_SERVERS,
+            auto_offset_reset='latest',
+            value_deserializer=lambda m: json.loads(m.decode('utf-8')),
+            consumer_timeout_ms=duration * 1000
+        )
+
+        print(f"\n🔍 Monitoring {topic} for {duration} seconds...")
+        decisions = {}
+
+        try:
+            for message in consumer:
+                decision = message.value
+                symbol = decision.get('symbol', 'unknown')
+                timestamp = decision.get('timestamp', 0)
+
+                # Track decisions by symbol
+                if symbol not in decisions:
+                    decisions[symbol] = []
+
+                decisions[symbol].append({
+                    'timestamp': timestamp,
+                    'action': decision.get('action', 'unknown'),
+                    'confidence': decision.get('confidence', 0)
+                })
+
+                print(f"📈 Decision: {symbol} - {decision.get('action')} "
+                      f"(confidence: {decision.get('confidence', 0):.2f})")
+        except Exception as e:
+            print(f"Monitoring stopped: {e}")
+
+        # Summary
+        print("\n📊 Summary:")
+        for symbol, decs in decisions.items():
+            print(f"  {symbol}: {len(decs)} decisions")
+            if len(decs) > 1:
+                print(f"    ⚠️  Multiple decisions detected - might indicate duplicates!")
+
+        consumer.close()
+
+    if __name__ == "__main__":
+        import argparse
+        parser = argparse.ArgumentParser(description='EOS Duplicate Test Tool')
+        parser.add_argument('--mode', choices=['inject', 'verify'], default='inject',
+                          help='Mode: inject duplicates or verify deduplication')
+        parser.add_argument('--topic', default='trading.signal.1m',
+                          help='Topic to inject into')
+        parser.add_argument('--duplicates', type=int, default=5,
+                          help='Number of duplicates per signal')
+        parser.add_argument('--delay', type=float, default=0.1,
+                          help='Delay between duplicates (seconds)')
+        parser.add_argument('--duration', type=int, default=30,
+                          help='Monitoring duration for verify mode (seconds)')
+
+        args = parser.parse_args()
+
+        if args.mode == 'inject':
+            inject_duplicates(args.topic, args.duplicates, args.delay)
+        else:
+            verify_deduplication('trading.decisions', args.duration)
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: eos-duplicate-test
+  namespace: trading
+spec:
+  template:
+    spec:
+      containers:
+      - name: injector
+        image: python:3.11-slim
+        command: ["/bin/bash", "-c"]
+        args:
+        - |
+          pip install kafka-python
+          python /scripts/inject-duplicates.py --mode inject --duplicates 5
+          echo "Waiting for processing..."
+          sleep 10
+          python /scripts/inject-duplicates.py --mode verify --duration 20
+        volumeMounts:
+        - name: script
+          mountPath: /scripts
+      volumes:
+      - name: script
+        configMap:
+          name: eos-demo-script
+          defaultMode: 0755
+      restartPolicy: Never

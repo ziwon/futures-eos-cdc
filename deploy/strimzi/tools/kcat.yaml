@@ -1,0 +1,11 @@
+apiVersion: v1
+kind: Pod
+metadata:
+  name: kcat
+  namespace: trading
+spec:
+  containers:
+  - name: kcat
+    image: edenhill/kcat:1.7.1
+    # Use a shell form to avoid issues with argument splitting
+    command: ["sh", "-c", "tail -f /dev/null"]

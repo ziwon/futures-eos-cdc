@@ -1,0 +1,20 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: signal-burst
+  namespace: trading
+spec:
+  template:
+    spec:
+      restartPolicy: Never
+      containers:
+      - name: burst
+        image: localhost:9001/signal-generator:0.1.0
+        imagePullPolicy: IfNotPresent
+        envFrom:
+        - configMapRef: { name: signal-generator-config }
+        env:
+        - { name: KAFKA_BOOTSTRAP, value: "trading-kafka-bootstrap:9092" }
+        - { name: TF, value: "1m" }
+        - { name: RATE_PER_SEC, value: "500" }   # messages per second
+        - { name: DURATION_SEC, value: "1" }     # 1-second burst

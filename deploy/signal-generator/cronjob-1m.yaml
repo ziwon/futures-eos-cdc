@@ -1,0 +1,25 @@
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: signal-generator-1m
+  namespace: trading
+spec:
+  schedule: "*/1 * * * *"
+  successfulJobsHistoryLimit: 1
+  failedJobsHistoryLimit: 2
+  jobTemplate:
+    spec:
+      template:
+        spec:
+          restartPolicy: Never
+          containers:
+          - name: signal-generator
+            image: localhost:9001/signal-generator:0.1.0
+            imagePullPolicy: IfNotPresent
+            envFrom:
+            - configMapRef: { name: signal-generator-config }
+            env:
+            - name: KAFKA_BOOTSTRAP
+              value: "trading-kafka-bootstrap:9092"
+            - name: TF
+              value: "1m"

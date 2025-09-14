@@ -1,0 +1,52 @@
+apiVersion: kafka.strimzi.io/v1beta2
+kind: KafkaConnector
+metadata:
+  name: pg-outbox
+  namespace: trading
+  labels:
+    strimzi.io/cluster: trading-connect
+spec:
+  class: io.debezium.connector.postgresql.PostgresConnector
+  tasksMax: 1
+  config:
+    database.hostname: pg.trading.svc.cluster.local
+    database.port: "5432"
+    database.user: trader
+    database.password: traderpw
+    database.dbname: trading
+
+    # Debezium Default Setting
+    plugin.name: pgoutput
+    publication.autocreate.mode: filtered
+    slot.name: pgoutbox_slot
+    slot.stream.params: "proto.version=1,publication_names=dbz_publication"
+    database.sslmode: disable
+    topic.prefix: dbz
+
+    # Consume Outbox events only
+    table.include.list: "app.outbox"
+    schema.include.list: "app"
+
+    # Outbox SMT for Final Topic Routing/Unwrapping
+    transforms: "outbox"
+    transforms.outbox.type: io.debezium.transforms.outbox.EventRouter
+
+    # Map our column names to the Outbox SMT expected logical names
+    transforms.outbox.table.field.event.id: "event_id"
+    transforms.outbox.table.field.event.key: "aggregate_id"
+    transforms.outbox.table.field.event.payload: "payload"
+    transforms.outbox.table.field.event.type: "type"
+    transforms.outbox.table.field.event.timestamp: "occurred_at_ms"
+    transforms.outbox.table.field.event.aggregate.id: "aggregate_id"
+    transforms.outbox.table.field.event.aggregate.type: "aggregate_type"
+
+    # Route by aggregate_type to trading.<aggregate_type>
+    transforms.outbox.route.by.field: "aggregate_type"
+    transforms.outbox.route.topic.replacement: "trading.${routedByValue}"
+
+    # Copy selected columns into headers for consumers
+    transforms.outbox.table.fields.additional.placement: "aggregate_id:header:aggregate_id,type:header:event_type,event_id:header:event_id,occurred_at:header:occurred_at"
+    transforms.outbox.add.headers: "event_id,aggregate_id,event_type,occurred_at"
+
+    # Drop tombstones after unwrap
+    transforms.outbox.unwrap.drop.tombstones: "true"

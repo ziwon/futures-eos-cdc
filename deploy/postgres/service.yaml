@@ -1,0 +1,11 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: pg
+  namespace: trading
+spec:
+  selector: { app: pg }
+  ports:
+  - name: psql
+    port: 5432
+    targetPort: 5432

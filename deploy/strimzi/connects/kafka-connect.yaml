@@ -1,0 +1,40 @@
+apiVersion: kafka.strimzi.io/v1beta2
+kind: KafkaConnect
+metadata:
+  name: trading-connect
+  namespace: trading
+  annotations:
+    strimzi.io/use-connector-resources: "true"
+  labels:
+    strimzi.io/cluster: trading
+spec:
+  version: 3.9.0
+  replicas: 1
+  bootstrapServers: trading-kafka-bootstrap:9092
+  build:
+    output:
+      type: docker
+      image: ttl.sh/futures-eos-connect:1h
+    plugins:
+      - name: debezium-postgres
+        artifacts:
+          - type: tgz
+            url: https://repo1.maven.org/maven2/io/debezium/debezium-connector-postgres/3.0.0.Final/debezium-connector-postgres-3.0.0.Final-plugin.tar.gz
+  config:
+    group.id: "trading-connect"
+    offset.storage.topic: _connect-offsets
+    config.storage.topic: _connect-configs
+    status.storage.topic: _connect-status
+    key.converter: org.apache.kafka.connect.storage.StringConverter
+    value.converter: org.apache.kafka.connect.json.JsonConverter
+    value.converter.schemas.enable: false
+    config.storage.replication.factor: 1
+    offset.storage.replication.factor: 1
+    status.storage.replication.factor: 1
+    rest.advertised.host.name: trading-connect-connect-api.trading.svc.cluster.local
+    rest.advertised.port: 8083
+    rest.advertised.listener: http
+  readinessProbe:
+    initialDelaySeconds: 10
+  livenessProbe:
+    initialDelaySeconds: 10
