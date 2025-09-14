@@ -32,6 +32,19 @@ data:
 
     CREATE INDEX IF NOT EXISTS idx_outbox_time ON app.outbox(occurred_at);
 
+    -- Generated epoch-millis column for Debezium Outbox SMT timestamp mapping
+    DO $$
+    BEGIN
+      IF NOT EXISTS (
+        SELECT 1 FROM information_schema.columns
+        WHERE table_schema = 'app' AND table_name = 'outbox' AND column_name = 'occurred_at_ms'
+      ) THEN
+        ALTER TABLE app.outbox
+          ADD COLUMN occurred_at_ms BIGINT
+          GENERATED ALWAYS AS (((EXTRACT(EPOCH FROM occurred_at) * 1000))::BIGINT) STORED;
+      END IF;
+    END$$;
+
     -- Idempotent Key: Block duplicate orders using client_order_id
     CREATE UNIQUE INDEX IF NOT EXISTS ux_orders_client_order_id ON app.orders(client_order_id);
 

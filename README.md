@@ -175,6 +175,9 @@ transforms.outbox.table.field.event.payload: payload
 transforms.outbox.route.topic.replacement: trading.${routedByValue}
 ```
 
+Note: This repo maps the Outbox SMT timestamp to a generated epoch-millis column `occurred_at_ms`. The database init script creates it as a stored generated column from `occurred_at`.
+If your database is already running without this column, apply the `ALTER TABLE` manually or recreate the cluster.
+
 ## EOS Configuration Details
 
 ### **Kafka Broker Settings**
@@ -215,7 +218,21 @@ retries: 3
 max.in.flight.requests.per.connection: 5
 ```
 
+## Prerequisites
+
+- Docker, `kubectl`, `helm`, `kind`, `just`, and JDK 21
+- Internet access to pull base images
+- Optional: NGINX Ingress and local DNS entries for `connect.local`, `kafka-ui.local` (or use port-forwarding)
+
 ## Quick Start
+
+### **0. Local Registry (first time only)**
+
+```bash
+just reg-up
+```
+
+Ensures a local registry at `localhost:9001` used by Kind as a mirror.
 
 ### **1. Bootstrap the Cluster**
 
@@ -225,11 +242,11 @@ just up
 
 Creates Kind cluster, deploys Kafka, PostgreSQL, and all components.
 
-### **2. Deploy Signal Generator & Processor**
+### **2. Build & Deploy Signal Generator & Processor**
 
 ```bash
-just signal-generator
-just signal-processor
+just signal-generator    # builds image with Jib and applies CronJobs
+just signal-processor    # builds image with Jib and deploys processor
 ```
 
 ### **3. Monitor the Pipeline**
@@ -238,12 +255,29 @@ just signal-processor
 # Watch signals being generated
 just tail-sig-1m
 
-# Watch decisions being made
+# Watch decisions being made (If failed, retry after waiting for a while)
 just tail-decisions
 
 # Access Kafka UI
 just kafka-ui-pf
-# Open http://localhost:8080
+  # Open http://localhost:8080
+  ```
+
+### **4. Verify Connect + Outbox**
+
+```bash
+# Ensure Connect and the outbox connector are applied (already done by `just up`)
+just connect
+just connector
+
+# Option A: If using Ingress and hosts entry
+curl http://connect.local/connector-plugins
+curl http://connect.local/connectors/pg-outbox/status
+
+# Option B: Port-forward for REST access
+kubectl -n trading port-forward svc/trading-connect-connect-api 8083:8083 &
+curl http://localhost:8083/connector-plugins
+curl http://localhost:8083/connectors/pg-outbox/status
 ```
 
 ## Demonstrating EOS
@@ -333,6 +367,31 @@ futures-eos-cdc/
 - **Throughput**: ~20-30% lower than at-least-once delivery
 - **Complexity**: Requires careful configuration and monitoring
 - **Storage**: Transaction logs and state stores increase storage needs
+
+## Troubleshooting
+
+- Topics not created:
+  - Ensure `deploy/strimzi/kafka/topics.yaml` labels use `strimzi.io/cluster: trading` (matches the Kafka CR name).
+  - Reapply: `just topics`.
+- Connect REST not reachable:
+  - Use port-forward: `kubectl -n trading port-forward svc/trading-connect-connect-api 8083:8083`.
+  - Or add `connect.local` entry and ensure NGINX Ingress is installed.
+- Outbox SMT timestamp error:
+  - Add the generated column on a running DB: `ALTER TABLE app.outbox ADD COLUMN occurred_at_ms BIGINT GENERATED ALWAYS AS (((EXTRACT(EPOCH FROM occurred_at) * 1000))::BIGINT) STORED;`
+- Images won’t pull:
+  - Run `just reg-up`, then rebuild with `just signal-generator` / `just signal-processor`.
+
+## Security Notes
+
+- The Connect NetworkPolicy and Ingress are permissive for local demos.
+- For production, restrict IP ranges, add auth (basic/OAuth) or mTLS, or keep Connect internal and access via Kafka UI/port-forwarding.
+
+## Future Plans
+
+- End-to-end Orders CDC using the outbox pattern publishing to `trading.orders`.
+- Observability: add JMX Exporter and Grafana dashboards for transactions/commits/aborts.
+- Hardening: publish Connect image to local registry instead of `ttl.sh`; add NetworkPolicies for least privilege.
+- CI/CD: Gradle wrapper + Actions to build, push, validate YAML, and run `just eos-verify` smoke tests.
 
 ## References
 

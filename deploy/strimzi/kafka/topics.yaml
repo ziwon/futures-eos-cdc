@@ -4,7 +4,7 @@ metadata:
   name: trading-orders
   namespace: trading
   labels:
-    strimzi.io/cluster: trading-kafka
+    strimzi.io/cluster: trading
 spec:
   topicName: trading.orders
   partitions: 6
@@ -19,7 +19,7 @@ metadata:
   name: trading-signal-1m
   namespace: trading
   labels:
-    strimzi.io/cluster: trading-kafka
+    strimzi.io/cluster: trading
 spec:
   topicName: trading.signal.1m
   partitions: 3
@@ -34,7 +34,7 @@ metadata:
   name: trading-signal-5m
   namespace: trading
   labels:
-    strimzi.io/cluster: trading-kafka
+    strimzi.io/cluster: trading
 spec:
   topicName: trading.signal.5m
   partitions: 3
@@ -49,7 +49,7 @@ metadata:
   name: trading-signal-15m
   namespace: trading
   labels:
-    strimzi.io/cluster: trading-kafka
+    strimzi.io/cluster: trading
 spec:
   topicName: trading.signal.15m
   partitions: 3

@@ -102,7 +102,7 @@ NC := `tput sgr0` # No Color
 	docker ps | grep kind-registry || true
 
 # === SIGNAL GENERATOR ===
-@signal-generator:
+@signal-generator: img-signal-generator
 	kubectl apply -n {{APP_NS}} -f deploy/signal-generator/configmap.yaml
 	kubectl apply -n {{APP_NS}} -f deploy/signal-generator/cronjob-1m.yaml
 	kubectl apply -n {{APP_NS}} -f deploy/signal-generator/cronjob-5m.yaml
