@@ -4,6 +4,7 @@ include(
     "libs:common-model",
     "libs:common-kafka",
     "apps:signal-generator",
-    "apps:signal-processor"
+    "apps:signal-processor",
+    "apps:order-manager"
 )
 

@@ -16,3 +16,6 @@ build/
 # Logs
 *.log
 
+# AGENTS
+.claude
+.gemini

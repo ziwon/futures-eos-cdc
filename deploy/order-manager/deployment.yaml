@@ -1,0 +1,59 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: order-manager
+  namespace: trading
+  labels:
+    app: order-manager
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: order-manager
+  template:
+    metadata:
+      labels:
+        app: order-manager
+    spec:
+      containers:
+      - name: manager
+        image: localhost:9001/order-manager:0.1.0
+        imagePullPolicy: Always
+        env:
+        - name: KAFKA_BOOTSTRAP
+          value: "trading-kafka-bootstrap:9092"
+        - name: DB_URL
+          value: "jdbc:postgresql://pg.trading.svc.cluster.local:5432/trading"
+        - name: DB_USER
+          value: "trader"
+        - name: DB_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: pg-secret
+              key: POSTGRES_PASSWORD
+        - name: CONFIDENCE_THRESHOLD
+          value: "0.65"
+        - name: BASE_QUANTITY
+          value: "1.0"
+        - name: MAX_QUANTITY
+          value: "10.0"
+        resources:
+          requests:
+            memory: "256Mi"
+            cpu: "250m"
+          limits:
+            memory: "1Gi"
+            cpu: "1000m"
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: order-manager
+  namespace: trading
+spec:
+  selector:
+    app: order-manager
+  ports:
+  - port: 8080
+    targetPort: 8080
+    name: http

@@ -5,87 +5,102 @@
 ## System Architecture
 
 ```ascii
-┌─────────────────────────────────────────────────────────────────────────────────────┐
-│                           Kubernetes Cluster (Kind)                                 │
-├─────────────────────────────────────────────────────────────────────────────────────┤
-│                         Signal Generation Layer                                     │
-│                                                                                     │
-│   ┌──────────────┐     ┌──────────────┐     ┌──────────────┐                        │
-│   │  CronJob 1m  │     │  CronJob 5m  │     │ CronJob 15m  │                        │
-│   │   (*/1 * *)  │     │  (*/5 * *)   │     │ (*/15 * *)   │                        │
-│   └──────┬───────┘     └──────┬───────┘     └──────-┬──────┘                        │
-│          │                    │                     │                               │
-│          └────────────────────┴─────────────────────┘                               │
-│                                    │                                                │
-│                                    ▼                                                │
-│                     ┌───────────────────────────────┐                               │
-│                     │      Signal Generator         │                               │
-│                     │       (Python/Kotlin)         │                               │
-│                     └──────────────┬────────────────┘                               │
-├────────────────────────────────────┼──────────────────────────────────────────────--┤
-│                           Kafka Message Bus                                         │
-│                                                                                     │
-│   ┌────────────────────────────────────────────────────────────────────┐            │
-│   │                    Kafka Cluster (3 brokers)                       │            │
-│   │                                                                    │            │
-│   │  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐              │            │
-│   │  │trading.signal│  │trading.signal│  │trading.signal│              │            │
-│   │  │     .1m      │  │     .5m      │  │     .15m     │              │            │
-│   │  │ partitions:3 │  │ partitions:3 │  │ partitions:3 │              │            │
-│   │  │ replicas:3   │  │ replicas:3   │  │ replicas:3   │              │            │
-│   │  └──────┬───────┘  └─────-─┬──────┘  └──────┬───────┘              │            │
-│   │         │                  │                │                      │            │
-│   │         └──────────────────┴────────────────┘                      │            │
-│   │                            │                                       │            │
-│   │                            ▼                                       │            │
-│   │         ┌──────────────────────────────────┐                       │            │
-│   │         │   __transaction_state (internal) │                       │            │
-│   │         │   (Stores transaction metadata)  │                       │            │
-│   │         └──────────────────────────────────┘                       │            │
-│   └────────────────────────────────────────────────────────────────────┘            │
-├─────────────────────────────────────────────────────────────────────────────────────┤
-│                        Stream Processing Layer                                      │
-│                                                                                     │
-│   ┌────────────────────────────────────────────────────────────────────┐            │
-│   │                   Signal Processor (Kafka Streams)                 │            │
-│   │                                                                    │            │
-│   │  ┌──────────────────────────────────────────────────────────┐      │            │
-│   │  │              EOS Configuration (EXACTLY_ONCE_V2)         │      │            │
-│   │  ├──────────────────────────────────────────────────────────┤      │            │
-│   │  │ • processing.guarantee = exactly_once_v2                 │      │            │
-│   │  │ • isolation.level = read_committed                       │      │            │
-│   │  │ • enable.idempotence = true                              │      │            │
-│   │  │ • acks = all                                             │      │            │
-│   │  │ • transactional.id = signal-processor-{uuid}             │      │            │
-│   │  └──────────────────────────────────────────────────────────┘      │            │
-│   │                                                                    │            │
-│   │  ┌──────────────┐    ┌──────────────┐    ┌──────────────┐          │            │
-│   │  │   Consumer   │───▶│  Processing  │───▶│   Producer   │          │            │
-│   │  │  (Transact.) │    │   (Stateful) │    │  (Transact.) │          │            │
-│   │  └──────────────┘    └──────┬───────┘    └──────┬───────┘          │            │
-│   │                             │                   │                  │            │
-│   │                             ▼                   ▼                  │            │
-│   │                   ┌──────────────────┐  ┌────────────────┐         │            │
-│   │                   │   State Store    │  │  trading.      │         │            │
-│   │                   │   (RocksDB)      │  │  decisions     │         │            │
-│   │                   │   - Windowed     │  │  partitions: 3 │         │            │
-│   │                   │   - Changelog    │  │  replicas: 3   │         │            │
-│   │                   └──────────────────┘  └────────────────┘         │            │
-│   └────────────────────────────────────────────────────────────────────┘            │
-├─────────────────────────────────────────────────────────────────────────────────────┤
-│                         CDC Pipeline (Future Extension)                             │
-│                                                                                     │
-│   ┌──────────────┐         ┌──────────────┐         ┌──────────────┐                │
-│   │  PostgreSQL  │────────▶│   Debezium   │────────▶│    Kafka     │                │
-│   │              │  WAL    │   Connector  │         │              │                │
-│   │ ┌──────────┐ │         │              │         │ ┌──────────┐ │                │
-│   │ │  orders  │ │         │ • Outbox     │         │ │ trading. │ │                │
-│   │ └──────────┘ │         │   Pattern    │         │ │  orders  │ │                │
-│   │ ┌──────────┐ │         │ • CDC via    │         │ └──────────┘ │                │
-│   │ │  outbox  │ │         │   WAL        │         │              │                │
-│   │ └──────────┘ │         │              │         │              │                │
-│   └──────────────┘         └──────────────┘         └──────────────┘                │
-└─────────────────────────────────────────────────────────────────────────────────────┘
+┌────────────────────────────────────────────────────────────────────────────────────────┐
+│                           Kubernetes Cluster (Kind)                                    │
+├────────────────────────────────────────────────────────────────────────────────────────┤
+│                         Signal Generation Layer                                        │
+│                                                                                        │
+│   ┌──────────────┐     ┌──────────────┐     ┌──────────────┐                           │
+│   │  CronJob 1m  │     │  CronJob 5m  │     │ CronJob 15m  │                           │
+│   │   (*/1 * *)  │     │  (*/5 * *)   │     │ (*/15 * *)   │                           │
+│   └──────┬───────┘     └──────┬───────┘     └──────┬───────┘                           │
+│          │                    │                    │                                   │
+│          └────────────────────┴────────────────────┘                                   │
+│                                    │                                                   │
+│                                    ▼                                                   │
+│                     ┌───────────────────────────────┐                                  │
+│                     │      Signal Generator         │                                  │
+│                     │       (Python/Kotlin)         │                                  │
+│                     └──────────────┬────────────────┘                                  │
+│                                    │                                                   │
+│                                    ▼                                                   │
+├────────────────────────────────────────────────────────────────────────────────────────┤
+│                           Kafka Message Bus                                            │
+│                                                                                        │
+│   ┌────────────────────────────────────────────────────────────────────┐               │
+│   │                    Kafka Cluster (3 brokers)                       │               │ 
+│   │                                                                    │               │
+│   │  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐              │               │
+│   │  │trading.signal│  │trading.signal│  │trading.signal│              │               │
+│   │  │     .1m      │  │     .5m      │  │     .15m     │              │               │
+│   │  │ partitions:3 │  │ partitions:3 │  │ partitions:3 │              │               │
+│   │  │ replicas:3   │  │ replicas:3   │  │ replicas:3   │              │               │
+│   │  └──────┬───────┘  └──────┬───────┘  └──────┬───────┘              │               │
+│   │         │                 │                 │                      │               │
+│   │         └─────────────────┴─────────────────┘                      │               │
+│   │                           │                                        │               │
+│   │                           ▼                                        │               │
+│   │  ┌──────────────────────────────────────────────────────────┐      │               │
+│   │  │                  Signal Processor                        │      │               │  
+│   │  │               (Kafka Streams App)                        │      │               │
+│   │  ├──────────────────────────────────────────────────────────┤      │               │
+│   │  │ • EOS: EXACTLY_ONCE_V2                                   │      │               │
+│   │  │ • isolation.level = read_committed                       │      │               │
+│   │  │ • enable.idempotence = true                              │      │               │
+│   │  │ • acks = all                                             │      │               │
+│   │  │ • transactional.id = signal-processor-{uuid}             │      │               │
+│   │  └──────────────────────────────────────────────────────────┘      │               │
+│   │         │                                 │                        │               │
+│   │   ┌─────▼────────┐                ┌───────▼───────┐                │               │
+│   │   │ Consumer     │                │  Producer     │                │               │
+│   │   │(Transactional)◄───┐     ┌────►|(Transactional)│                │               │
+│   │   └─────┬────────┘    │     │     └───────┬───────┘                │               │
+│   │         │             │     │             │                        │               │
+│   │         ▼             │     │             ▼                        │               │
+│   │  ┌─────────────┐      │     │    ┌───────────────────┐             │               │
+│   │  │ State Store │      │     │    │ trading.decisions │             │               │
+│   │  │  (RocksDB)  │      │     │    │   partitions:3    │             │               │
+│   │  │ - Windowed  │      │     │    │   replicas:3      │             │               │
+│   │  │ - Changelog │      │     │    └───────────────────┘             │               │
+│   │  └─────────────┘      │     │                                      │               │
+│   │                       │     │                                      │               │
+│   │        ┌──────────────┴─────┴───────────────────┐                  │               │
+│   │        │ Processing (Stateful Aggregation)      │                  │               │
+│   │        └────────────────────┬───────────────────┘                  │               │
+│   │                             │                                      │               │
+│   │                             ▼                                      │               │
+│   │         ┌──────────────────────────────────┐                       │               │
+│   │         │   __transaction_state (internal) │                       │               │
+│   │         │   (Stores transaction metadata)  │                       │               │
+│   │         └──────────────────────────────────┘                       │               │
+│   └────────────────────────────────────────────────────────────────────┘               │
+│                                    │                                                   │
+│                                    ▼                                                   │
+├────────────────────────────────────────────────────────────────────────────────────────┤
+│                         Order Management & CDC Pipeline                                │
+│                                                                                        │
+│   ┌──────────────────────┐       ┌──────────────────────┐       ┌───────────────────┐  │
+│   │   Order Manager      │       │   Debezium Connector │       │    Kafka Topic    │  │
+│   │ (Kafka Consumer)     ├──────►│   (Kafka Connect)    ├──────►│  trading.orders   │  │
+│   │                      │       │                      │       │                   │  │
+│   │ ┌──────────────────┐ │       │ • Outbox Pattern     │       │ ┌───────────────┐ │  │
+│   │ │ BEGIN            │ │       │ • Reads WAL          │       │ │ Event Records │ │  │
+│   │ │   INSERT orders  │ │       │ • Extracts outbox    │       │ └───────────────┘ │  │
+│   │ │   INSERT outbox  │ │       │   records            │       │                   │  │
+│   │ │ COMMIT           │ │       │ • Routes to topic    │       │                   │  │
+│   │ └──────────────────┘ │       └──────────────────────┘       └───────────────────┘  │
+│   │                      │                                                             │
+│   │ ┌──────────────────┐ │                                                             │
+│   │ │ PostgreSQL       │ │                                                             │
+│   │ │ ┌──────────────┐ │ │                                                             │
+│   │ │ │  app.orders  │ │ │                                                             │
+│   │ │ └──────────────┘ │ │                                                             │
+│   │ │ ┌──────────────┐ │ │                                                             │
+│   │ │ │  app.outbox  │ │ │                                                             │
+│   │ │ └──────────────┘ │ │                                                             │
+│   │ └──────────────────┘ │                                                             │
+│   └──────────────────────┘                                                             │
+└────────────────────────────────────────────────────────────────────────────────────────┘
 ```
 
 ## How EOS (Exactly-Once Semantics) Works
@@ -159,8 +174,11 @@ For order processing (future implementation):
 
 ```sql
 BEGIN;
-  INSERT INTO orders (client_order_id, ...) VALUES (...);
-  INSERT INTO outbox (aggregate_id, event_type, payload) VALUES (...);
+  INSERT INTO app.orders (id, client_order_id, symbol, side, qty, price, status, created_at, updated_at)
+  VALUES (...);
+
+  INSERT INTO app.outbox (event_id, aggregate_type, aggregate_id, type, payload, occurred_at)
+  VALUES (...);
 COMMIT;
 ```
 
@@ -169,14 +187,28 @@ COMMIT;
 ```yaml
 transforms: outbox
 transforms.outbox.type: io.debezium.transforms.outbox.EventRouter
-transforms.outbox.table.field.event.id: id
+
+# Field mappings (match app.outbox schema)
+transforms.outbox.table.field.event.id: event_id
 transforms.outbox.table.field.event.key: aggregate_id
 transforms.outbox.table.field.event.payload: payload
-transforms.outbox.route.topic.replacement: trading.${routedByValue}
+transforms.outbox.table.field.event.type: type
+transforms.outbox.table.field.event.aggregate.id: aggregate_id
+transforms.outbox.table.field.event.aggregate.type: aggregate_type
+
+# Route to a single topic
+transforms.outbox.route.by.field: aggregate_type
+transforms.outbox.route.topic.replacement: trading.orders
+
+# Add selected columns as headers
+transforms.outbox.table.fields.additional.placement: |
+  aggregate_id:header:aggregate_id,
+  type:header:event_type,
+  event_id:header:event_id,
+  occurred_at:header:occurred_at
 ```
 
-Note: This repo maps the Outbox SMT timestamp to a generated epoch-millis column `occurred_at_ms`. The database init script creates it as a stored generated column from `occurred_at`.
-If your database is already running without this column, apply the `ALTER TABLE` manually or recreate the cluster.
+Note: We omit an explicit outbox event timestamp mapping. Debezium will use the record `ts_ms` as the event timestamp. If you prefer mapping from a column, add an `INT64` epoch-millis column (e.g., `occurred_at_ms`) and set `transforms.outbox.table.field.event.timestamp` accordingly.
 
 ## EOS Configuration Details
 
@@ -242,11 +274,12 @@ just up
 
 Creates Kind cluster, deploys Kafka, PostgreSQL, and all components.
 
-### **2. Build & Deploy Signal Generator & Processor**
+### **2. Build & Deploy Apps**
 
 ```bash
 just signal-generator    # builds image with Jib and applies CronJobs
 just signal-processor    # builds image with Jib and deploys processor
+just order-manager       # builds image with Jib and deploys order manager
 ```
 
 ### **3. Monitor the Pipeline**
@@ -279,6 +312,14 @@ kubectl -n trading port-forward svc/trading-connect-connect-api 8083:8083 &
 curl http://localhost:8083/connector-plugins
 curl http://localhost:8083/connectors/pg-outbox/status
 ```
+
+### **5. Verify Orders and Outbox**
+
+- DB tables:
+  - `just pg-orders`
+  - `just pg-outbox`
+- Kafka topic:
+  - `kubectl -n trading exec -it kcat -- sh -lc "kcat -b trading-kafka-bootstrap:9092 -C -t trading.orders -q -o -10 -e"`
 
 ## Demonstrating EOS
 
@@ -332,7 +373,8 @@ Signal → Begin Txn → Process → Crash → Txn Aborted → Retry → Decisio
 futures-eos-cdc/
 ├── apps/
 │   ├── signal-generator/        # Kotlin signal generator
-│   └── signal-processor/        # Kafka Streams EOS processor
+│   ├── signal-processor/        # Kafka Streams EOS processor
+│   └── order-manager/           # Consumes decisions, writes Orders + Outbox
 ├── libs/
 │   ├── common-model/           # Shared DTOs
 │   └── common-kafka/           # Kafka config with EOS settings
@@ -359,7 +401,7 @@ futures-eos-cdc/
 2. **Transactional processing** ensures atomic read-process-write
 3. **State stores** maintain consistency across failures
 4. **Idempotent producers** handle retries safely
-5. **CDC with outbox pattern** extends EOS to databases
+5. **CDC with outbox pattern** extends EOS to databases and emits `trading.orders`
 
 ## Trade-offs
 
@@ -367,6 +409,21 @@ futures-eos-cdc/
 - **Throughput**: ~20-30% lower than at-least-once delivery
 - **Complexity**: Requires careful configuration and monitoring
 - **Storage**: Transaction logs and state stores increase storage needs
+
+## Order Manager
+
+- Purpose: consumes `trading.decisions` and atomically persists domain state and outbox events.
+- Atomic writes: one transaction writes `app.orders` and `app.outbox` to guarantee consistency.
+- Confidence threshold: env `CONFIDENCE_THRESHOLD` controls when orders are created; default `0.65`.
+- Idempotency: unique `client_order_id` on `app.orders`; downstream idempotency via outbox `event_id`.
+- Configuration: `KAFKA_BOOTSTRAP`, `DB_URL`, `DB_USER`, `DB_PASSWORD`, `ORDER_MANAGER_GROUP_ID`.
+
+## Outbox Pattern
+
+- Schema: `app.outbox(event_id UUID PK, aggregate_type TEXT, aggregate_id UUID, type TEXT, payload JSONB, occurred_at TIMESTAMPTZ, occurred_at_ms BIGINT GENERATED)`.
+- EventRouter: maps columns to logical fields; routes by `aggregate_type` to `trading.${routedByValue,,}s`.
+- Message key: `aggregate_id` ensures per-aggregate ordering in Kafka.
+- Headers: `event_id`, `aggregate_id`, `event_type`, `occurred_at` added for easy consumption.
 
 ## Troubleshooting
 
@@ -376,8 +433,12 @@ futures-eos-cdc/
 - Connect REST not reachable:
   - Use port-forward: `kubectl -n trading port-forward svc/trading-connect-connect-api 8083:8083`.
   - Or add `connect.local` entry and ensure NGINX Ingress is installed.
-- Outbox SMT timestamp error:
-  - Add the generated column on a running DB: `ALTER TABLE app.outbox ADD COLUMN occurred_at_ms BIGINT GENERATED ALWAYS AS (((EXTRACT(EPOCH FROM occurred_at) * 1000))::BIGINT) STORED;`
+- Outbox connector task failing:
+  - Timestamp mapping error: omit `transforms.outbox.table.field.event.timestamp` or use an `INT64` epoch-millis column (e.g., `occurred_at_ms`).
+  - Topic routing error (RegexRouter): use a constant replacement (e.g., `trading.orders`) or a valid regex replacement.
+- Outbox timestamp column:
+  - `occurred_at_ms` is a generated column; the application must not insert it.
+  - If upgrading an existing DB, add it: `ALTER TABLE app.outbox ADD COLUMN occurred_at_ms BIGINT GENERATED ALWAYS AS (((EXTRACT(EPOCH FROM occurred_at) * 1000))::BIGINT) STORED;`
 - Images won’t pull:
   - Run `just reg-up`, then rebuild with `just signal-generator` / `just signal-processor`.
 
@@ -388,9 +449,9 @@ futures-eos-cdc/
 
 ## Future Plans
 
-- End-to-end Orders CDC using the outbox pattern publishing to `trading.orders`.
+- Order Executor service that consumes `trading.orders` and calls an exchange; idempotent via `event_id` header.
 - Observability: add JMX Exporter and Grafana dashboards for transactions/commits/aborts.
-- Hardening: publish Connect image to local registry instead of `ttl.sh`; add NetworkPolicies for least privilege.
+- Hardening: publish Connect image to local registry; add NetworkPolicies for least privilege.
 - CI/CD: Gradle wrapper + Actions to build, push, validate YAML, and run `just eos-verify` smoke tests.
 
 ## References
@@ -402,4 +463,3 @@ futures-eos-cdc/
 ## License
 
 MIT - Use freely for learning and prototyping.
-

@@ -37,7 +37,24 @@ jib {
     }
     container {
         mainClass = "com.trading.signalprocessor.MainKt"
-        jvmFlags = listOf("--enable-preview", "-XX:+UseZGC")
+        jvmFlags = listOf(
+            "--enable-preview",
+            // ZGC Configuration
+            "-XX:+UseZGC",
+            "-XX:+ZGenerational",  // Enable generational ZGC (Java 21+)
+            "-Xmx2g",  // Max heap size
+            "-Xms512m",  // Initial heap size
+            "-XX:SoftMaxHeapSize=1800m",  // Soft limit to trigger GC under memory pressure
+            "-XX:ZCollectionInterval=30",  // Force GC at least every 30 seconds
+            "-XX:+ZProactive",  // Enable proactive GC (clean up when memory is available)
+            "-XX:ZUncommitDelay=60",  // Return unused memory to OS after 60 seconds
+            // Diagnostics & Monitoring
+            "-XX:+UnlockDiagnosticVMOptions",
+            "-XX:ZStatisticsInterval=10",  // Log ZGC statistics every 10 seconds
+            "-Xlog:gc*:stdout:time,uptime,level,tags",  // Comprehensive GC logging
+            // Virtual Threads
+            "-Djdk.virtualThreadScheduler.parallelism=128"
+        )
         creationTime = "USE_CURRENT_TIMESTAMP"
         user = "nonroot"
     }

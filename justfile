@@ -42,6 +42,10 @@ NC := `tput sgr0` # No Color
 		--version {{STRIMZI_VERSION}} \
 		--set watchNamespaces[0]={{APP_NS}} \
 		--set createGlobalResources=true \
+		--set resources.limits.memory=4Gi \
+		--set resources.limits.cpu=2 \
+		--set resources.requests.memory=2Gi \
+		--set resources.requests.cpu=500m \
 		--wait --timeout 5m
 	@echo "{{GREEN}}Strimzi Operator installed successfully{{NC}}"
 
@@ -72,6 +76,22 @@ NC := `tput sgr0` # No Color
 	kubectl apply -n {{APP_NS}} -f deploy/postgres/statefulset.yaml
 	kubectl apply -n {{APP_NS}} -f deploy/postgres/service.yaml
 	kubectl rollout status sts/pg -n {{APP_NS}} --timeout=600s
+
+@pg-outbox:
+	@echo "{{CYAN}}Viewing outbox table in PostgreSQL...{{NC}}"
+	@kubectl exec pg-0 -n {{APP_NS}} -- psql -U trader -d trading -c "SELECT event_id, aggregate_id, aggregate_type, type, occurred_at FROM app.outbox ORDER BY occurred_at DESC LIMIT 20;"
+
+@pg-orders:
+	@echo "{{CYAN}}Viewing orders table in PostgreSQL...{{NC}}"
+	@kubectl exec pg-0 -n {{APP_NS}} -- psql -U trader -d trading -c "SELECT client_order_id, symbol, side, qty, price, status, created_at FROM app.orders ORDER BY created_at DESC LIMIT 20;"
+
+@pg-tables:
+	@echo "{{CYAN}}Listing all tables in trading database...{{NC}}"
+	@kubectl exec pg-0 -n {{APP_NS}} -- psql -U trader -d trading -c "\dt app.*"
+
+@pg-shell:
+	@echo "{{GREEN}}Opening PostgreSQL shell...{{NC}}"
+	kubectl exec -it pg-0 -n {{APP_NS}} -- psql -U trader -d trading
 
 # === KAFKA UI ===
 @kafka-ui:
@@ -115,6 +135,23 @@ NC := `tput sgr0` # No Color
 @signal-processor: img-signal-processor processor-deploy
 	@echo "{{GREEN}}Signal Processor deployed successfully{{NC}}"
 
+# === ORDER MANAGER ===
+@order-manager: img-order-manager order-manager-deploy
+	@echo "{{GREEN}}Order Manager deployed successfully{{NC}}"
+
+@order-manager-deploy:
+	kubectl apply -n {{APP_NS}} -f deploy/order-manager/deployment.yaml
+	kubectl -n {{APP_NS}} rollout status deployment/order-manager --timeout=300s
+
+@img-order-manager:
+	@if [ -x ./gradlew ]; then ./gradlew -Djib.allowInsecureRegistries=true :apps:order-manager:jib; else gradle -Djib.allowInsecureRegistries=true :apps:order-manager:jib; fi
+
+@order-manager-logs:
+	kubectl -n {{APP_NS}} logs -f deployment/order-manager
+
+@order-manager-restart:
+	kubectl -n {{APP_NS}} rollout restart deployment/order-manager
+
 @processor-deploy:
 	kubectl apply -n {{APP_NS}} -f deploy/signal-processor/topic-decisions.yaml
 	kubectl apply -n {{APP_NS}} -f deploy/signal-processor/deployment.yaml
@@ -128,6 +165,10 @@ NC := `tput sgr0` # No Color
 
 @processor-restart:
 	kubectl -n {{APP_NS}} rollout restart deployment/signal-processor
+
+@processor-gc:
+	@echo "{{CYAN}}Monitoring ZGC performance...{{NC}}"
+	kubectl -n {{APP_NS}} logs deployment/signal-processor --tail=100 | grep -E "GC\(|gc\[|Pause|ZGC|Heap" || echo "No GC logs found. Rebuild with GC logging enabled."
 
 # === MONITORING & TAILING ===
 @tail-sig-1m:

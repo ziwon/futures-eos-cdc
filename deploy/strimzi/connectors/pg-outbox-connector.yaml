@@ -36,13 +36,14 @@ spec:
     transforms.outbox.table.field.event.key: "aggregate_id"
     transforms.outbox.table.field.event.payload: "payload"
     transforms.outbox.table.field.event.type: "type"
-    transforms.outbox.table.field.event.timestamp: "occurred_at_ms"
+    # Use connector record timestamp (explicitly unset event.timestamp mapping)
+    transforms.outbox.table.field.event.timestamp: null
     transforms.outbox.table.field.event.aggregate.id: "aggregate_id"
     transforms.outbox.table.field.event.aggregate.type: "aggregate_type"
 
-    # Route by aggregate_type to trading.<aggregate_type>
+    # Route by aggregate_type to trading.<aggregate_type> (e.g., ORDER -> trading.order)
     transforms.outbox.route.by.field: "aggregate_type"
-    transforms.outbox.route.topic.replacement: "trading.${routedByValue}"
+    transforms.outbox.route.topic.replacement: "trading.orders"  # Route all outbox events to trading.orders
 
     # Copy selected columns into headers for consumers
     transforms.outbox.table.fields.additional.placement: "aggregate_id:header:aggregate_id,type:header:event_type,event_id:header:event_id,occurred_at:header:occurred_at"
